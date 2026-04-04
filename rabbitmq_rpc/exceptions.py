@@ -2,7 +2,7 @@ class RPCClientException(Exception):
     """Base exception for RPCClient errors."""
     pass
 
-class ConnectionError(RPCClientException):
+class MQConnectionError(RPCClientException):
     """Raised when there is a connection error."""
     pass
 
@@ -14,10 +14,6 @@ class EventRegistrationError(RPCClientException):
     """Raised when there is an error in event registration."""
     pass
 
-class EventPublishError(RPCClientException):
-    """Raised when there is an error in event publishing."""
-    pass
-
-class EventSubscribeError(RPCClientException):
-    """Raised when there is an error in event subscribing."""
+class CallTimeoutError(RPCClientException):
+    """Raised when there is an error in event registration."""
     pass
