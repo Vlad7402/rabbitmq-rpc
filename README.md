@@ -38,110 +38,20 @@ pip install git+https://github.com/Vlad7402/rabbitmq-rpc.git
 ```
 
 ## 🛠️ Quick Start
-
-### 🎯 Registering Events
-
-In `Service 1`, define event handlers and register them with the `RPCClient` using the `register_event` method:
-
-```python
-import asyncio
-from rabbitmq_rpc import RPCClient
-
-
-async def handler_addition(x, y):
-    return x + y
-
-
-async def handle_subtraction(x, y):
-    return x - y
-
-
-async def handle_multiplication(x, y):
-    return x * y
-
-
-async def handle_division(x, y):
-    return x / y
-
-
-async def main():
-    # Initialize RPC client
-    rpc_client = await RPCClient.create(
-        host='localhost',
-        port=5920,
-        user='rabbitmq_user',
-        password='rabbitmq_password',
-        vhost='/',
-        ssl=False,
-    )
-
-    # Register event handlers
-    await rpc_client.register_RPC_callable('service1.addition', handler_addition)
-    await rpc_client.register_RPC_callable('service1.subtraction', handle_subtraction)
-    await rpc_client.register_RPC_callable('service1.multiplication', handle_multiplication)
-    await rpc_client.register_RPC_callable('service1.division', handle_division)
-
-    # Keep listening for events
-    await asyncio.Future()
-
-
-if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+See examples inside:
+```sh
+rabbtmq-rpc/rabbtmq_rpc/Example
 ```
-
-### 📞 Calling Events
-
-In `Service 2`, invoke the events defined in `Service 1`:
-
-```python
-import asyncio
-from rabbitmq_rpc import RPCClient
-
-async def main():
-    # Initialize RPC client
-    rpc_client = await RPCClient.create(
-        host='localhost',
-        port=5920,
-        user='rabbitmq_user',
-        password='rabbitmq_password',
-        vhost='/',
-        ssl=False,
-    )
-    
-    # Call service1 events
-    add_result = await rpc_client.call('service1.addition', data={"x": 1, "y": 2})
-    print(f"Addition Result: {add_result}")
-
-    sub_result = await rpc_client.call('service1.subtraction', data={"x": 1, "y": 2})
-    print(f"Subtraction Result: {sub_result}")
-
-    mul_result = await rpc_client.call('service1.multiplication', data={"x": 1, "y": 2})
-    print(f"Multiplication Result: {mul_result}")
-
-    # Call with timeout and retry mechanism
-    div_result = await rpc_client.call('service1.division', data={"x": 5, "y": 2}, timeout=10, retry_count=3)
-    print(f"Division Result: {div_result}")
-
-    # Send event without waiting for a response
-    rpc_client.send('service1.multiplication', data={"x": 1, "y": 2})    
-
-if __name__ == '__main__':
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
-```
-
-### 🛡️ Error Handling
+## 🛡️ Error Handling
 
 `rabbitmq_rpc` provides custom exceptions to handle various connection and RPC-related issues:
 
-- `ConnectionError`
+- `MQConnectionError`
 - `RPCError`
 - `EventRegistrationError`
-- `EventPublishError`
-- `EventSubscribeError`
+- `RPCClientException`
 
-### 🔌 Disconnecting
+## 🔌 Disconnecting
 
 Gracefully disconnect from RabbitMQ when you're done:
 

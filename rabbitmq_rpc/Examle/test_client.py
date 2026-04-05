@@ -16,7 +16,7 @@ async def main():
         service_name='test_client'
     )
     #Client may be a server
-    await rpc_client.register_worker('call_back', some_func)
+    await rpc_client.register_worker('callback', some_func)
 
 
     #Send and get some structure, wait for result
@@ -52,7 +52,7 @@ async def main():
     await asyncio.sleep(5)
 
     #Call a callback
-    await rpc_client.send('test_server','call_back')
+    await rpc_client.send('test_server','callback')
 
     await asyncio.sleep(5)
 

@@ -12,7 +12,7 @@ async def some_func(conf: RabbitMQConfig, need_sleep: bool):
 async def callback():
     rpc_client = RPCClient.get_instance()
     print("Server may be a client at the same time.")
-    await rpc_client.send('test_client', 'call_back')
+    await rpc_client.send('test_client', 'callback')
 
 async def killer():
     sys.exit(1)
@@ -32,7 +32,7 @@ async def main():
     # Register event handlers
     await rpc_client.register_rpc_callable('test', some_func)
     await rpc_client.register_worker('test', some_func)
-    await rpc_client.register_worker('call_back', callback)
+    await rpc_client.register_worker('callback', callback)
     await rpc_client.register_rpc_callable('killer', killer)
 
     # Keep listening for events
