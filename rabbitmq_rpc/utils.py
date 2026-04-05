@@ -1,20 +1,34 @@
-from typing import Awaitable, TypeVar, Any
+import logging
+from abc import ABC, abstractmethod
 
-from tenacity import retry, stop_after_attempt, RetryError, stop_after_delay
+_log_handler = logging.StreamHandler()
+_log_handler.setLevel(logging.DEBUG)
+_log_formatter = logging.Formatter('%(name)s: %(asctime)s - %(levelname)s:: %(message)s')
+_log_handler.setFormatter(_log_formatter)
 
-from rabbitmq_rpc.exceptions import RPCError
+def get_log_handler() -> logging.Handler:
+    return _log_handler
 
-T = TypeVar('T')
+class AsyncMixin(ABC):
+    def __init__(self, *args, **kwargs):
+        """
+        Standard constructor used for arguments pass
+        Do not override. Use __ainit__ instead
+        """
+        self.__storedargs = args, kwargs
+        self.async_initialized = False
 
-async def with_retry_and_timeout(coro: Awaitable, retry_count: int, timeout: float) -> Any:
-    @retry(stop=(stop_after_attempt(retry_count) |
-                 stop_after_delay(timeout)))
-    async def _with_retry() -> T:
-        try:
-            return await coro
-        except Exception:
-            raise
-    try:
-        return await _with_retry()
-    except RetryError as e:
-        raise RPCError(f"Operation failed after {retry_count} attempts or {timeout:.1f} sec timeout: {e}")
+    @abstractmethod
+    async def __ainit__(self, *args, **kwargs):
+        """Async constructor, you should implement this"""
+
+    async def __initobj(self):
+        """Crutch used for __await__ after spawning"""
+        assert not self.async_initialized
+        self.async_initialized = True
+        # pass the parameters to __ainit__ that passed to __init__
+        await self.__ainit__(*self.__storedargs[0], **self.__storedargs[1])
+        return self
+
+    def __await__(self):
+        return self.__initobj().__await__()

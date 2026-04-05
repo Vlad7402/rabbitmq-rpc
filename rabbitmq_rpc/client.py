@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from asyncio import AbstractEventLoop, TimeoutError
-from typing import Union, Callable, Any, Optional, Dict, Awaitable
+from typing import Union, Callable, Any, Optional, Awaitable, List
 
 from aio_pika import connect_robust, DeliveryMode, exceptions, RobustConnection
 
@@ -9,37 +9,23 @@ from aio_pika.abc import AbstractRobustConnection
 from aio_pika.patterns import RPC, JsonRPC, Master
 
 from rabbitmq_rpc.config import RabbitMQConfig
-from rabbitmq_rpc.exceptions import MQConnectionError, RPCError, EventRegistrationError
-from rabbitmq_rpc.utils import with_retry_and_timeout
+from rabbitmq_rpc.exceptions import MQConnectionError, RPCError, EventRegistrationError, RPCClientException
+from rabbitmq_rpc.utils import AsyncMixin, get_log_handler
 
 
-class RPCClient:
+class RPCClient(AsyncMixin):
     """A wrapper for aio-pika that simplifies the usage of RabbitMQ with asynchronous RPC."""
 
-    _instances: Dict[str, 'RPCClient'] = {}
-    _locks: Dict[str, asyncio.Lock] = {}
+    _instance: Optional[RPCClient] = None
+
+    @staticmethod
+    def get_instance() -> RPCClient:
+        if RPCClient._instance is None: raise RPCClientException("Instance not created.")
+        return RPCClient._instance
 
     def __init__(
             self,
-            config: RabbitMQConfig,
-            loop: Optional[AbstractEventLoop] = None,
-            logger: Optional[logging.Logger] = None,
-    ) -> None:
-        """Initializes the RPCClient instance."""
-        self.config = config
-        self.loop = loop or asyncio.get_event_loop()
-        self.logger = logger or logging.getLogger(__name__)
-        self.rpc: Optional[Union[RPC, JsonRPC]] = None
-        self.master: Optional[Master] = None
-        self.connection: Optional[AbstractRobustConnection] = None
-
-    @property
-    def url(self) -> str:
-        """Returns the RabbitMQ URL."""
-        return self.config.get_url()
-
-    @staticmethod
-    async def create(
+            service_name: str,
             config: Optional[RabbitMQConfig] = None,
             loop: Optional[AbstractEventLoop] = None,
             logger: Optional[logging.Logger] = None,
@@ -49,20 +35,31 @@ class RPCClient:
             password: Optional[str] = None,
             vhost: Optional[str] = '/',
             ssl: bool = False,
-            **kwargs,
-    ) -> 'RPCClient':
+    ) -> None:
         """Creates or returns an existing instance of RPCClient."""
-        assert (
-                (config is not None) or
-                (
-                        (host is not None) and
-                        (port is not None) and
-                        (user is not None) and
-                        (password is not None)
-                )
-        ), "Use config or host, port, user and password to connect to RabbitMQ."
+        self.service_name = service_name
+        self.__registered_handlers_names: List[str] = []
+        self.config = config
+        self.loop = loop or asyncio.get_event_loop()
+        self.logger = logger or logging.getLogger(__name__)
+        self.rpc: Optional[Union[RPC, JsonRPC]] = None
+        self.master: Optional[Master] = None
+        self.connection: Optional[AbstractRobustConnection] = None
+
+        if RPCClient._instance is not None: raise RPCClientException("Only one instance is allowed.")
+
+        if(
+            (config is None) and
+            (
+                (host is None) or
+                (port is None) or
+                (user is None) or
+                (password is None)
+            )
+        ): raise RPCClientException("Use config or host, port, user and password to connect to RabbitMQ.")
+
         if config is None:
-            config = RabbitMQConfig(
+            self.config = RabbitMQConfig(
                 host=host,
                 port=port,
                 user=user,
@@ -71,42 +68,25 @@ class RPCClient:
                 ssl=ssl
             )
 
-        url = config.get_url()
+        if logger is None:
+            self.logger = logging.getLogger("RCP_Client")
+            self.logger.setLevel(logging.INFO)
+            self.logger.addHandler(get_log_handler())
 
-        if url not in RPCClient._locks:
-            RPCClient._locks[url] = asyncio.Lock()
+        RPCClient._instance = self
+        super().__init__()
+        if not self.async_initialized: RPCClientException("Use .")
 
-        async with RPCClient._locks[url]:
-            if url not in RPCClient._instances:
-                loop = loop or asyncio.get_running_loop()
 
-                if logger is None:
-                    logging.basicConfig(
-                        level=logging.INFO,
-                        format='%(asctime)s - %(levelname)s - %(message)s'
-                    )
-                    logger = logging.getLogger(__name__)
+    async def __ainit__(self, *args, **kwargs):
+        """Initializes the RPCClient instance."""
+        if not self.is_connected: await self.connect()
+        self.async_initialized = True
 
-                RPCClient._instances[url] = await RPCClient.__create_instance(
-                    config=config,
-                    logger=logger,
-                    loop=loop,
-                    **kwargs,
-                )
-
-        return RPCClient._instances[url]
-
-    @staticmethod
-    async def __create_instance(
-            config: RabbitMQConfig,
-            loop: AbstractEventLoop,
-            logger: logging.Logger,
-            **kwargs,
-    ) -> 'RPCClient':
-        """Creates an instance of RPCClient."""
-        instance = RPCClient(config=config, loop=loop, logger=logger)
-        await instance.connect(**kwargs)
-        return instance
+    @property
+    def url(self) -> str:
+        """Returns the RabbitMQ URL."""
+        return self.config.get_url()
 
     @property
     def is_connected(self) -> bool:
@@ -171,26 +151,25 @@ class RPCClient:
 
     async def send(
             self,
+            service_name: str,
             event: str,
-            retry_count: int = 1,
             timeout: float = 15,
             **kwargs: Any,
     ) -> None:
         """Sends an event with the specified parameters. Kwargs support only"""
         await self._send_event(
-            event,
+            f"{service_name}.{event}",
             "worker",
-            retry_count,
             timeout,
             self.master.create_task(
-            channel_name=event,
+            channel_name=f"{service_name}.{event}_worker",
             kwargs=kwargs)
         )
 
     async def call(
             self,
+            service_name: str,
             event: str,
-            retry_count: Optional[int] = 1,
             timeout: Optional[float] = 15,
             expiration: Optional[int] = None,
             priority: int = 5,
@@ -199,25 +178,23 @@ class RPCClient:
     ) -> Any:
         """Calls an RPC method with the specified parameters. Kwargs support only"""
         result = await self._send_event(
-            event,
+            f"{service_name}.{event}",
             "RPC",
-            retry_count,
             timeout,
             self.rpc.call(
-                method_name=event,
+                method_name=f"{service_name}.{event}_RPC",
                 kwargs=kwargs,
                 expiration=expiration,
                 priority=priority,
                 delivery_mode=delivery_mode)
         )
-        self.logger.info(f"RPC call {event} succeed")
+        self.logger.info(f"RPC call {service_name}.{event} succeed")
         return result
 
     async def _send_event(
             self,
             event: str,
             event_type_str: str,
-            retry_count: int,
             timeout: float,
             coro: Awaitable
     ) -> Any:
@@ -226,10 +203,13 @@ class RPCClient:
             raise MQConnectionError("RPCClient is not connected")
         try:
             self.logger.info(f"{event_type_str} call {event}")
-            return await with_retry_and_timeout(coro, timeout=timeout, retry_count=retry_count)
-        except (TimeoutError, exceptions.AMQPError) as e:
-            self.logger.error(f"Failed to call {event_type_str} {event}: {str(e)}")
-            raise RPCError(f"Failed to call {event_type_str} {event}: {str(e)}")
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except TimeoutError as e:
+            self.logger.error(f"Timeout {timeout:.1f} sec reached on call {event_type_str} {event}: {e}")
+            raise RPCError(f"Timeout {timeout:.1f} sec reached on call {event_type_str} {event}: {e}")
+        except exceptions.AMQPError as e:
+            self.logger.error(f"Failed to call {event_type_str} {event}: {e}")
+            raise RPCError(f"Failed to call {event_type_str} {event}: {e}")
 
     async def register_rpc_callable(self, event: str, handler: Callable[..., Any], **kwargs: Any) -> None:
         """Registers an event handler for RPC calls."""
@@ -237,8 +217,8 @@ class RPCClient:
             event,
             "RPC",
             self.rpc.register(
-                method_name=event,
-                func=handler,
+                method_name=f"{self.service_name}.{event}_RPC",
+                func=self.__logged_handler(handler, event, "RPC"),
                 auto_delete=True,
                 **kwargs)
         )
@@ -249,22 +229,42 @@ class RPCClient:
             event,
             "worker",
             self.master.create_worker(
-                queue_name=event,
-                func=handler,
+                queue_name=f"{self.service_name}.{event}_worker",
+                func=self.__logged_handler(handler, event, "worker"),
                 auto_delete=True,
                 **kwargs)
         )
 
     async def _register_handler(self, event: str, event_type: str, coro: Awaitable) -> None:
         """Registers an event handler."""
+        name_used = False
+        try:
+            self.__registered_handlers_names.index(f"{self.service_name}.{event}_{event_type}")
+            name_used = True
+        except ValueError:
+            pass
+        if name_used: raise EventRegistrationError(f"Event with name {event} already registered")
         if not self.is_connected:
             raise MQConnectionError("RPCClient is not connected")
         try:
             await coro
-            self.logger.info(f"Registered {event_type} for {event}")
+            self.__registered_handlers_names.append(f"{self.service_name}.{event}_{event_type}")
+            self.logger.info(f"Registered {event_type} for {event} on service {self.service_name}")
         except (exceptions.AMQPError, ValueError) as e:
-            self.logger.error(f"Failed to register {event_type} for {event}: {str(e)}")
-            raise EventRegistrationError(f"Failed to register {event_type} for {event}: {str(e)}")
+            self.logger.error(f"Failed to register {event_type} for {event} on service {self.service_name}: {str(e)}")
+            raise EventRegistrationError(f"Failed to register {event_type} for {event}"
+                                         f" on service {self.service_name}: {str(e)}")
+
+    def __logged_handler(self, handler: Callable[..., Any], event: str, event_type: str):
+        """Logging funk for calls"""
+
+        def new_handler(*args, **kwargs):
+            nonlocal handler
+            nonlocal event
+            self.logger.info(f"Handler {event_type} {event} of service {self.service_name} called")
+            return handler(*args, **kwargs)
+
+        return new_handler
 
     def __repr__(self) -> str:
         """Returns a string representation of the RPCClient instance."""

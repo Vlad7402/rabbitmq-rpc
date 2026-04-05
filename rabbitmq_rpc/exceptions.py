@@ -13,7 +13,3 @@ class RPCError(RPCClientException):
 class EventRegistrationError(RPCClientException):
     """Raised when there is an error in event registration."""
     pass
-
-class CallTimeoutError(RPCClientException):
-    """Raised when there is an error in event registration."""
-    pass
