@@ -75,7 +75,8 @@ class RPCClient(AsyncMixin):
 
         RPCClient._instance = self
         super().__init__()
-        if not self.async_initialized: RPCClientException("Use .")
+        if not self.async_initialized: raise RPCClientException("Use rpc_client = await RPCClient()."
+                                                                " Await is necessary.")
 
 
     async def __ainit__(self, *args, **kwargs):
